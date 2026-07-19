@@ -1,0 +1,57 @@
+# importing Libraries
+
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.document_loaders.base_o365 import CHUNK_SIZE
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_experimental.text_splitter import SemanticChunker
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_chroma import Chroma
+from langchain_openai import ChatOpenAI
+
+# for .pdf file
+doc = PyPDFLoader('document.pdf')
+pdf_document = doc.load()
+# print(f"my pdf doc is: {pdf_document}")
+
+# CHUNKING
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=500,chunk_overlap=50)
+splits = text_splitter.split_documents(pdf_document)
+
+
+# print(splits)
+
+
+# embeddings
+embedding = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
+)
+
+# semantic chunking
+splitter = SemanticChunker(embedding)
+semantic_splits = splitter.split_documents(pdf_document)
+
+# vector DB
+vector_DB = Chroma.from_documents(documents=semantic_splits,embedding=embedding)
+
+
+
+
+# LLM Layer
+llm = ChatOpenAI(
+    model="gpt-4.1",
+    temperature=0.2,
+    top_p = 0.9,
+    
+
+
+# Query
+query = "What is genai ?"
+results = vector_DB.similarity_search_with_relevance_scores(query, k=3)
+
+
+if len(results) == 0 or results[0][1] < 0.20:
+    print("I don't know the answer based upon the provided document")
+else:
+    context="\n".join([doc.page_content for doc,score in results])
+    response = llm.invoke(f"Context:\n{context} \n\nQuestion: {query}")
+    print(response.content)
