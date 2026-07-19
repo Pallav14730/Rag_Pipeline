@@ -7,6 +7,15 @@ from langchain_experimental.text_splitter import SemanticChunker
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain_openai import ChatOpenAI
+import redis
+
+
+# Redis Cache
+redis.Redis(
+    host="localhost",
+    port=6379,
+    decode_responses=True
+)
 
 # for .pdf file
 doc = PyPDFLoader('document.pdf')
@@ -41,17 +50,23 @@ llm = ChatOpenAI(
     model="gpt-4.1",
     temperature=0.2,
     top_p = 0.9,
-    
+)
 
-
+def ask_Question(query: str):
 # Query
-query = "What is genai ?"
-results = vector_DB.similarity_search_with_relevance_scores(query, k=3)
+ 
+    results = vector_DB.similarity_search_with_relevance_scores(query, k=3)
 
+    cache_answer = cache.get(query)
+    if cache_answer:
+        print("Asnwer return from redis cache")
+        return cache_answer
 
-if len(results) == 0 or results[0][1] < 0.20:
-    print("I don't know the answer based upon the provided document")
-else:
-    context="\n".join([doc.page_content for doc,score in results])
-    response = llm.invoke(f"Context:\n{context} \n\nQuestion: {query}")
-    print(response.content)
+    if len(results) == 0 or results[0][1] < 0.20:
+        return "I don't know the answer based upon the provided document"
+    else:
+        context="\n".join([doc.page_content for doc,score in results])
+        response = llm.invoke(f"Context:\n{context} \n\nQuestion: {query}")
+        answer = response.content
+        cache.set(query,answer)
+        return answer
