@@ -1,0 +1,186 @@
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_experimental.text_splitter import SemanticChunker
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_chroma import Chroma
+from langchain_openai import ChatOpenAI
+from langchain_core.tools import tool
+from langgraph.prebuilt import create_react_agent
+from langchain_community.tools import DuckDuckGoSearchRun
+
+import httpx
+import os
+import csv
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Setup HTTP client with SSL verification disabled as per your setup
+client = httpx.Client(verify=False)
+
+# 1. EMBEDDINGS & VECTOR STORE
+embedding = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2" 
+)
+
+# Load document
+doc = PyPDFLoader('Data.pdf')
+pdf_document = doc.load()
+
+# Semantic Chunking & Vector DB population
+splitter = SemanticChunker(embedding)
+semantic_splits = splitter.split_documents(pdf_document)
+vector_DB = Chroma.from_documents(documents=semantic_splits, embedding=embedding)
+
+
+# 2. THE COMPREHENSIVE AGENTIC TOOL SUITE
+
+@tool
+def query_knowledge_base(query: str) -> str:
+    """
+    Searches the provided data document to find textual answers about medical information, 
+    internal guidelines, or patient data compiled in the vector database.
+    """
+    results = vector_DB.similarity_search_with_relevance_scores(query, k=3)
+    if len(results) == 0:
+        return "I cannot find any relevant text information regarding this in the provided document."
+    context = "\n".join([doc.page_content for doc, score in results])
+    return context
+
+
+@tool
+def web_search_gateway(query: str) -> str:
+    """
+    Queries the live internet to fetch updated clinical trials, new drug approvals, 
+    or external medical facts not found in the local uploaded PDF document.
+    """
+    search = DuckDuckGoSearchRun()
+    try:
+        return search.run(query)
+    except Exception as e:
+        return f"Web search failed: {str(e)}"
+
+
+@tool
+def calculate_descriptive_statistics(numbers: list) -> dict:
+    """
+    Performs scientific computing on a list of raw numerical health data (e.g., raw blood sugar logs, 
+    patient ages, or weights). Returns mean, median, standard deviation, minimum, and maximum values.
+    """
+    if not numbers:
+        return {"error": "The input list is empty."}
+    
+    data = np.array(numbers, dtype=float)
+    return {
+        "mean": float(np.mean(data)),
+        "median": float(np.median(data)),
+        "std_dev": float(np.std(data)),
+        "min": float(np.min(data)),
+        "max": float(np.max(data)),
+        "data_points_count": len(data)
+    }
+
+
+@tool
+def generate_and_save_chart(metric_name: str, values: list, categories: list, chart_title: str) -> str:
+    """
+    Generates a data chart/graph using matplotlib based on structured metric data and saves it locally. 
+    Use this tool when the user asks to visualize data, show a graph, plot trends, or compare statistics.
+    """
+    try:
+        plt.clf()
+        plt.figure(figsize=(8, 5))
+        bars = plt.bar(categories, values, color='#2ca02c', edgecolor='black', alpha=0.8)
+        
+        for bar in bars:
+            height = bar.get_height()
+            plt.annotate(f'{height}',
+                        xy=(bar.get_x() + bar.get_width() / 2, height),
+                        xytext=(0, 3),
+                        textcoords="offset points",
+                        ha='center', va='bottom')
+            
+        plt.title(chart_title, fontsize=12, fontweight='bold', pad=15)
+        plt.ylabel(metric_name, fontsize=10)
+        plt.xticks(rotation=15, ha='right')
+        plt.grid(axis='y', linestyle='--', alpha=0.5)
+        plt.tight_layout()
+        
+        output_filename = "agent_generated_plot.png"
+        plt.savefig(output_filename, dpi=300)
+        plt.close()
+        return f"Successfully generated the graph and saved it locally as '{output_filename}'."
+    except Exception as e:
+        return f"Failed to generate chart: {str(e)}"
+
+
+@tool
+def export_data_to_csv(filename: str, headers: list, rows: list) -> str:
+    """
+    Creates a structured .csv file locally. Useful for exporting parsed patient logs, 
+    complication ratios, or tabular data summaries for external use.
+    Input arguments:
+      - filename: Target name (e.g., 'patient_report.csv')
+      - headers: List of string names for columns
+      - rows: List of lists containing the actual row data values matching the headers
+    """
+    try:
+        # Ensure correct extension
+        if not filename.endswith('.csv'):
+            filename += '.csv'
+            
+        with open(filename, mode='w', newline='', encoding='utf-8') as file:
+            writer = csv.writer(file)
+            writer.writerow(headers)
+            writer.writerows(rows)
+            
+        return f"Successfully compiled data metrics and exported CSV report to '{filename}'."
+    except Exception as e:
+        return f"Failed to export CSV: {str(e)}"
+
+
+# 3. LLM LAYER (Kept exactly same)
+llm = ChatOpenAI(
+   base_url="", 
+   model="genailab-maas-gpt-35-turbo",
+   api_key="",
+   http_client=client
+)
+
+
+# 4. INITIALIZING THE AGENTIC LAYER
+# Bundling all 5 advanced tools together
+tools = [
+    query_knowledge_base, 
+    web_search_gateway, 
+    calculate_descriptive_statistics, 
+    generate_and_save_chart, 
+    export_data_to_csv
+]
+
+system_message = (
+    "You are an expert AI Research Assistant. You are equipped with a powerful tool suite "
+    "allowing you to search internal document databases, scan the live web, calculate scientific statistics, "
+    "generate plots, and compile downloadable CSV datasets.\n\n"
+    "When processing user commands, break them into logical steps. If a user asks a complex multi-part question, "
+    "call your tools in sequence (e.g., fetch data -> calculate stats -> chart data -> export CSV) as needed "
+    "to build a comprehensive report."
+)
+
+# Build the LangGraph ReAct Agent
+agent_executor = create_react_agent(llm, tools, state_modifier=system_message)
+
+
+# 5. EXECUTION EXAMPLES
+if __name__ == "__main__":
+    
+    # Example 1: Multi-step analytical prompt
+    complex_prompt = (
+        "Find the occurrences of diabetes complications in the document. Calculate the mean value "
+        "of those occurrence percentages, plot a bar graph of them, and export the structured dataset to a file named 'complications.csv'."
+    )
+    
+    print(f"--- Sending Complex Pipeline Request to Agent ---\n")
+    response = agent_executor.invoke({"messages": [("user", complex_prompt)]})
+    
+    print("\n--- Agent Workflow Execution Output ---")
+    print(response["messages"][-1].content)
